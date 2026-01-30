@@ -1,0 +1,54 @@
+{
+    "name": "deploy-mate",
+    "displayName": "Deploy Mate",
+    "description": "Your friendly deployment assistant for Angular apps to Windows IIS servers via PowerShell remoting",
+    "version": "1.0.0",
+    "publisher": "ivanristic",
+    "icon": "images/icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/yourusername/deploy-mate"
+    },
+    "keywords": [
+        "deploy",
+        "deployment",
+        "angular",
+        "iis",
+        "windows",
+        "powershell",
+        "remote"
+    ],
+    "engines": {
+        "vscode": "^1.70.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "extension.deployProject",
+                "title": "Deploy Project"
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "eslint src --ext ts"
+    },
+    "devDependencies": {
+        "@types/node": "^20.5.7",
+        "@types/vscode": "^1.70.0",
+        "@typescript-eslint/eslint-plugin": "^6.4.0",
+        "@typescript-eslint/parser": "^6.4.0",
+        "eslint": "^8.47.0",
+        "typescript": "^5.1.6"
+    }
+}
