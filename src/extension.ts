@@ -38,7 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
                 excludeFromCleanup: "",
                 excludeFromCopy: "",
                 jsonConfiguration: false,
-                defaultConfiguration: ""
+                configuration: ""
             };
             fs.writeFileSync(configPath, JSON.stringify(template, null, 4));
             vscode.window.showWarningMessage(
@@ -72,7 +72,7 @@ export function activate(context: vscode.ExtensionContext) {
         );
 
         // Set HTML content
-        panel.webview.html = getWebviewContent(config.defaultConfiguration || '');
+        panel.webview.html = getWebviewContent();
 
         // Handle messages from the webview
         panel.webview.onDidReceiveMessage(
@@ -81,22 +81,30 @@ export function activate(context: vscode.ExtensionContext) {
                     outputChannel.clear();
                     outputChannel.show();
                     
-                    // Look for environment-specific config first (e.g., deploy.production.config.json)
-                    // If not found, use default deploy.config.json
-                    const envConfigPath = path.join(projectRoot, `deploy.${message.configuration}.config.json`);
+                    // Use input value to find deploy config file
+                    // If input has value (e.g., "prod"), look for deploy.prod.config.json
+                    // If not found or input is empty, use default deploy.config.json
                     const defaultConfigPath = path.join(projectRoot, 'deploy.config.json');
-                    
                     let deployConfig;
                     let usedConfigPath;
                     
-                    if (fs.existsSync(envConfigPath)) {
-                        usedConfigPath = envConfigPath;
-                        const envConfigContent = fs.readFileSync(envConfigPath, 'utf-8');
-                        deployConfig = JSON.parse(envConfigContent);
-                        outputChannel.appendLine(`Using environment-specific config: deploy.${message.configuration}.config.json`);
+                    if (message.configFileSelector && message.configFileSelector.trim()) {
+                        const specificConfigPath = path.join(projectRoot, `deploy.${message.configFileSelector}.config.json`);
+                        if (fs.existsSync(specificConfigPath)) {
+                            usedConfigPath = specificConfigPath;
+                            const specificConfigContent = fs.readFileSync(specificConfigPath, 'utf-8');
+                            deployConfig = JSON.parse(specificConfigContent);
+                            outputChannel.appendLine(`Using config file: deploy.${message.configFileSelector}.config.json`);
+                        } else {
+                            // Fallback to default if specific file not found
+                            usedConfigPath = defaultConfigPath;
+                            deployConfig = config;
+                            outputChannel.appendLine(`Config file deploy.${message.configFileSelector}.config.json not found, using default: deploy.config.json`);
+                        }
                     } else {
+                        // Use default when input is empty
                         usedConfigPath = defaultConfigPath;
-                        deployConfig = config; // Use already loaded default config
+                        deployConfig = config;
                         outputChannel.appendLine(`Using default config: deploy.config.json`);
                     }
                     
@@ -146,7 +154,7 @@ export function activate(context: vscode.ExtensionContext) {
                     outputChannel.appendLine('\n=== Building Project ===');
                     try {
                         await buildProject({
-                            configuration: message.configuration,
+                            configuration: deployConfig.configuration,
                             workspaceRoot: projectRoot
                         });
                     } catch (error: any) {
@@ -167,7 +175,7 @@ export function activate(context: vscode.ExtensionContext) {
                         try {
                             await prepareConfig({
                                 appName: appName,
-                                defaultConfiguration: message.configuration,
+                                defaultConfiguration: deployConfig.configuration,
                                 workspaceRoot: projectRoot
                             });
                             outputChannel.appendLine('\n=== Config Preparation Completed ===');
@@ -225,14 +233,14 @@ function ensureDeployConfig() {
             excludeFromCleanup: "",
             excludeFromCopy: "",
             jsonConfiguration: false,
-            defaultConfiguration: ""
+            configuration: ""
         };
         fs.writeFileSync(configPath, JSON.stringify(template, null, 4));
         vscode.window.showInformationMessage('deploy.config.json created!');
     }
 }
 
-function getWebviewContent(defaultConfig: string): string {
+function getWebviewContent(): string {
     return `
         <!DOCTYPE html>
         <html lang="en">
@@ -326,8 +334,8 @@ function getWebviewContent(defaultConfig: string): string {
                     <input type="password" id="password" placeholder="Enter password" />
                 </div>
                 <div class="form-group">
-                    <label for="configuration">Configuration</label>
-                    <input type="text" id="configuration" placeholder="Enter configuration" value="${defaultConfig}" />
+                    <label for="configFileSelector">Configuration file</label>
+                    <input type="text" id="configFileSelector" placeholder="e.g., prod (for deploy.prod.config.json)" value="" />
                 </div>
                 <button id="deployBtn">Deploy</button>
             </div>
@@ -335,7 +343,7 @@ function getWebviewContent(defaultConfig: string): string {
                 const vscode = acquireVsCodeApi();
                 const usernameInput = document.getElementById('username');
                 const passwordInput = document.getElementById('password');
-                const configurationInput = document.getElementById('configuration');
+                const configFileSelectorInput = document.getElementById('configFileSelector');
                 const deployBtn = document.getElementById('deployBtn');
                 const errorMessage = document.getElementById('errorMessage');
 
@@ -363,7 +371,7 @@ function getWebviewContent(defaultConfig: string): string {
                         command: 'deploy',
                         username: usernameInput.value,
                         password: passwordInput.value,
-                        configuration: configurationInput.value
+                        configFileSelector: configFileSelectorInput.value
                     });
                 }
 

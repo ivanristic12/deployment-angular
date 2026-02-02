@@ -1,13 +1,13 @@
 {
-    "name": "deploy-mate",
-    "displayName": "Deploy Mate",
+    "name": "deploy-to-iis",
+    "displayName": "Deploy to IIS",
     "description": "Your friendly deployment assistant for Angular apps to Windows IIS servers via PowerShell remoting",
     "version": "1.0.0",
     "publisher": "ivanristic",
     "icon": "images/icon.png",
     "repository": {
         "type": "git",
-        "url": "https://github.com/yourusername/deploy-mate"
+        "url": "https://github.com/yourusername/deploy-to-iis"
     },
     "keywords": [
         "deploy",

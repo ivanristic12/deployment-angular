@@ -1,4 +1,4 @@
-# Deploy Mate
+# Deploy to IIS
 
 Your friendly deployment assistant for Angular applications to Windows IIS servers via PowerShell remoting.
 
@@ -27,7 +27,7 @@ Your friendly deployment assistant for Angular applications to Windows IIS serve
 
 ### 1. Install Extension
 
-Install Deploy Mate from the VS Code marketplace or from a `.vsix` file.
+Install Deploy to IIS from the VS Code marketplace or from a `.vsix` file.
 
 ### 2. Configure Deployment
 
@@ -43,8 +43,8 @@ Edit the configuration with your server details:
     "backupFolderLocation": "c:\\backup\\YourApp",
     "excludeFromCleanup": "",
     "excludeFromCopy": "",
-    "jsonConfiguration": true,
-    "defaultConfiguration": "production"
+    "jsonConfiguration": false,
+    "configuration": "production"
 }
 ```
 
@@ -65,8 +65,8 @@ Edit the configuration with your server details:
 | `backupFolderLocation` | Backup location on remote server |
 | `excludeFromCleanup` | Comma-separated files/folders to preserve (e.g., "web.config,uploads") |
 | `excludeFromCopy` | Comma-separated files to skip during copy |
-| `jsonConfiguration` | Enable environment-specific config transformation |
-| `defaultConfiguration` | Default environment to deploy |
+| `jsonConfiguration` | Enable environment-specific config transformation | Configuration jsons need to be under src/assets/configuration, in form configuration.json, configuration.{environment}.json. Same as for environment.
+| `configuration` |  Environment to deploy |
 
 ## Multiple Environments
 
@@ -94,7 +94,7 @@ If anything fails, automatic rollback restores the previous version.
 ### "Access Denied" or Connection Errors
 
 - Ensure WinRM is enabled on the server: `winrm quickconfig`
-- Use full domain username format: `username`
+- Username without domain: `username`
 - Verify you have admin rights on the remote server
 - Check firewall allows ports 5985 (HTTP) or 5986 (HTTPS)
 
@@ -115,7 +115,7 @@ The extension tests credentials before deployment to prevent lockouts. If locked
 
 ### 1.0.0
 
-Initial release of Deploy Mate
+Initial release of Deploy to IIS
 - One-click deployment to IIS
 - Credential testing
 - Automatic backups and rollback
@@ -129,4 +129,4 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ---
 
-**Enjoy deploying with Deploy Mate! 🚀**
+**Enjoy deploying with Deploy to IIS! 🚀**
