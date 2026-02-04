@@ -7,9 +7,13 @@ param(
     [string]$AppFolderLocation = "",
     [string]$NewFilesPath = "",
     [string]$BackupFolder = "",
-    [string[]]$ExcludeFromCleanup = @(),  # Files to preserve in the target folder
-    [string[]]$ExcludeFromCopy = @()      # Files to exclude when copying from source
+    [string]$ExcludeFromCleanup = "",  # Comma-separated list of files to preserve in the target folder
+    [string]$ExcludeFromCopy = ""      # Comma-separated list of files to exclude when copying from source
 )
+
+# Convert comma-separated strings to arrays
+$ExcludeFromCleanupArray = if ($ExcludeFromCleanup) { $ExcludeFromCleanup -split ',' | ForEach-Object { $_.Trim() } } else { @() }
+$ExcludeFromCopyArray = if ($ExcludeFromCopy) { $ExcludeFromCopy -split ',' | ForEach-Object { $_.Trim() } } else { @() }
  
 #----------------------------Functions---------------------------------------- 
 function Convert-LocalPathToUNC {
@@ -213,6 +217,8 @@ try {
 
     # Try UNC/robocopy first (fast), fallback to Copy-Item if UNC not accessible
     Write-Info "Copying files to remote server..."
+    Write-Info "Source path (NewFilesPath): $NewFilesPath"
+    Write-Info "Destination (remoteTemp): $remoteTemp"
     $copySucceeded = $false
     
     try {
@@ -226,21 +232,25 @@ try {
             $excludeDirs = @()
             $excludeFiles = @()
             
-            foreach ($pattern in $ExcludeFromCopy) {
-                $cleanPattern = $pattern -replace '\*', ''
-                
-                if ($cleanPattern -notmatch '\.[a-zA-Z0-9]+$') {
-                    $excludeDirs += $cleanPattern
+            foreach ($pattern in $ExcludeFromCopyArray) {
+                $trimmedPattern = $pattern.Trim()
+                # Determine if it's a directory or file based on extension
+                # Robocopy supports wildcards, so append * for startsWith behavior
+                if ($trimmedPattern -notmatch '\.[a-zA-Z0-9]+$') {
+                    $excludeDirs += "$trimmedPattern*"
                 } else {
-                    $excludeFiles += $pattern
+                    $excludeFiles += "$trimmedPattern*"
                 }
             }
             
             # Build robocopy command arguments
+            # Use /MIR or /E to copy contents (not the folder itself)
+            Write-Info "Robocopy source: $NewFilesPath"
+            Write-Info "Robocopy destination: $uncRemoteTemp"
             $robocopyArgs = @(
                 $NewFilesPath,
                 $uncRemoteTemp,
-                "/E", "/MT:16", "/R:2", "/W:1", "/NFL", "/NDL", "/NP"
+                "/MIR", "/MT:16", "/R:2", "/W:1", "/NP"
             )
             
             if ($excludeDirs.Count -gt 0) {
@@ -283,11 +293,18 @@ try {
             $shouldExclude = $false
             $relativePath = $file.FullName.Substring($NewFilesPath.Length + 1)
             
-            foreach ($pattern in $ExcludeFromCopy) {
-                if ($file.Name -like $pattern -or $relativePath -like $pattern -or $relativePath -like "*\$pattern\*") {
-                    $shouldExclude = $true
-                    break
+            foreach ($pattern in $ExcludeFromCopyArray) {
+                $trimmedPattern = $pattern.Trim()
+                # Check if any part of the relative path starts with the pattern
+                # Split path into segments and check each one
+                $pathSegments = $relativePath -split '\\\\'
+                foreach ($segment in $pathSegments) {
+                    if ($segment -like "$trimmedPattern*") {
+                        $shouldExclude = $true
+                        break
+                    }
                 }
+                if ($shouldExclude) { break }
             }
             
             if (-not $shouldExclude) {
@@ -323,7 +340,7 @@ try {
 
     # Execute deployment with detailed state tracking
     $deployResult = Invoke-Command -Session $session -ScriptBlock {
-        param($AppPoolName, $AppFolderLocation, $NewFilesPath, $BackupFolder, $ExcludeFromCleanup)
+        param($AppPoolName, $AppFolderLocation, $NewFilesPath, $BackupFolder, [string[]]$ExcludeFromCleanup)
 
         function Write-Log { 
             param($m) 
@@ -399,48 +416,47 @@ try {
 			
 			# Clean target folder, respecting exclusions
 			Write-Log "Cleaning target folder..."
-			$allItems = Get-ChildItem -Path $AppFolderLocation -Recurse
-			$preservedItems = @()
-			$itemsToRemove = @()
+			
+			if ($ExcludeFromCleanup.Count -gt 0) {
+				Write-Log "Exclusion patterns: $($ExcludeFromCleanup -join ', ')"
+			}
+			
+			$allItems = Get-ChildItem -Path $AppFolderLocation -Force
 
+			# Find all items that match exclusion patterns (direct children only)
 			foreach ($item in $allItems) {
-				$shouldPreserve = $false
+				$shouldKeep = $false
 				foreach ($ex in $ExcludeFromCleanup) {
-					# Match exact name or wildcard pattern
-					if ($item.Name -like $ex) {
-						$shouldPreserve = $true
-						$preservedItems += $item
-						Write-Log "Preserving item: $($item.Name)"
+					$pattern = $ex.Trim()
+					if ($item.Name -like "$pattern*") {
+						$shouldKeep = $true
+						Write-Log "Preserving: $($item.Name)"
 						break
 					}
 				}
 				
-				if (-not $shouldPreserve) {
-					$itemsToRemove += $item
-				}
-			}
-
-			# Remove non-preserved items
-			foreach ($item in $itemsToRemove) {
-				try {
-					if (Test-Path -LiteralPath $item.FullName) {
-						Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
-					}
-				} catch {
-					# Only warn if the item still exists (not already removed by parent folder deletion)
-					if (Test-Path -LiteralPath $item.FullName) {
-						Write-Log "Warning: Could not remove $($item.FullName): $_"
+				if (-not $shouldKeep) {
+					try {
+						if (Test-Path -LiteralPath $item.FullName) {
+							Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+						}
+					} catch {
+						Write-Log "Warning: Could not remove $($item.Name): $_"
 					}
 				}
 			}
-
 
 			$result.AppFolderCleaned = $true
 			Write-Log "Target folder cleaned."
 
             # Copy new files
             Write-Log "Deploying new files..."
-            Copy-Item "$NewFilesPath\*" -Destination $AppFolderLocation -Recurse -Force
+            # Ensure we copy contents, not the folder itself
+            if ($NewFilesPath.EndsWith('\')) {
+                Copy-Item "$($NewFilesPath)*" -Destination $AppFolderLocation -Recurse -Force
+            } else {
+                Copy-Item "$NewFilesPath\*" -Destination $AppFolderLocation -Recurse -Force
+            }
             Write-Log "New files deployed."
 
             # Start app pool
@@ -465,7 +481,7 @@ try {
             Write-Log "Error during deployment: $_"
             return $result
         }
-    } -ArgumentList $AppPoolName, $AppFolderLocation, $remoteTemp, $BackupFolder, $ExcludeFromCleanup
+    } -ArgumentList $AppPoolName, $AppFolderLocation, $remoteTemp, $BackupFolder, (,$ExcludeFromCleanupArray)
 
     # Update deployment state based on remote results
     $deploymentState.AppPoolStopped = $deployResult.AppPoolStopped
@@ -480,9 +496,14 @@ try {
     }
 
     # Clean up remote temp folder
-    Write-Info "Cleaning remote temp folder..."
-    $uncRemoteTempCleanup = Convert-LocalPathToUNC -LocalPath $remoteTemp
-    Remove-Item -Path $uncRemoteTempCleanup -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Info "Cleaning up remote temp folder..."
+    Invoke-Command -Session $session -ScriptBlock {
+        param($tempPath)
+        if (Test-Path $tempPath) {
+            Remove-Item -Path $tempPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } -ArgumentList $remoteTemp
+    Write-Success "Remote temp folder cleaned up."
     $deploymentState.RemoteTempCreated = $false
 
     Write-Success "Deployment finished successfully."
