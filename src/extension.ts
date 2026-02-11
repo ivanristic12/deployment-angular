@@ -35,8 +35,8 @@ export function activate(context: vscode.ExtensionContext) {
                 poolName: "",
                 appFolderLocation: "",
                 backupFolderLocation: "",
-                excludeFromCleanup: "",
-                excludeFromCopy: "",
+                excludeFromCleanup: [],
+                excludeFromCopy: [],
                 jsonConfiguration: false,
                 configuration: ""
             };
@@ -189,6 +189,14 @@ export function activate(context: vscode.ExtensionContext) {
                     // Deploy the project
                     outputChannel.appendLine('\n=== Deploying Project ===');
                     try {
+                        // Convert array fields to comma-separated strings
+                        const excludeFromCleanup = Array.isArray(deployConfig.excludeFromCleanup) 
+                            ? deployConfig.excludeFromCleanup.join(',')
+                            : (deployConfig.excludeFromCleanup || '');
+                        const excludeFromCopy = Array.isArray(deployConfig.excludeFromCopy)
+                            ? deployConfig.excludeFromCopy.join(',')
+                            : (deployConfig.excludeFromCopy || '');
+
                         await deployProject({
                             username: fullUsername,
                             password: message.password,
@@ -196,8 +204,8 @@ export function activate(context: vscode.ExtensionContext) {
                             poolName: deployConfig.poolName,
                             appFolderLocation: deployConfig.appFolderLocation,
                             backupFolderLocation: deployConfig.backupFolderLocation,
-                            excludeFromCleanup: deployConfig.excludeFromCleanup || '',
-                            excludeFromCopy: deployConfig.excludeFromCopy || '',
+                            excludeFromCleanup: excludeFromCleanup,
+                            excludeFromCopy: excludeFromCopy,
                             workspaceRoot: projectRoot,
                             appName: appName,
                             outputChannel: outputChannel

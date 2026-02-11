@@ -41,8 +41,8 @@ Edit the configuration with your server details:
     "poolName": "YourAppPoolName",
     "appFolderLocation": "c:\\inetpub\\wwwroot\\YourApp",
     "backupFolderLocation": "c:\\backup\\YourApp",
-    "excludeFromCleanup": "",
-    "excludeFromCopy": "",
+    "excludeFromCleanup": [],
+    "excludeFromCopy": [],
     "jsonConfiguration": false,
     "configuration": "production"
 }
@@ -63,8 +63,8 @@ Edit the configuration with your server details:
 | `poolName` | IIS Application Pool name |
 | `appFolderLocation` | Target folder on remote server (use double backslashes) |
 | `backupFolderLocation` | Backup location on remote server |
-| `excludeFromCleanup` | Comma-separated files/folders to preserve (e.g., "web.config,uploads") |
-| `excludeFromCopy` | Comma-separated files to skip during copy |
+| `excludeFromCleanup` | Array of files/folders to preserve in target (e.g., ["Logs", "temp", "uploads"]) |
+| `excludeFromCopy` | Array of files/folders to exclude when copying from source (e.g., ["web.config", ".env"]) |
 | `jsonConfiguration` | Enable environment-specific config transformation | Configuration jsons need to be under src/assets/configuration, in form configuration.json, configuration.{environment}.json. Same as for environment.
 | `configuration` |  Environment to deploy |
 

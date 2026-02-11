@@ -11,10 +11,6 @@ param(
     [string]$ExcludeFromCopy = ""      # Comma-separated list of files to exclude when copying from source
 )
 
-# Convert comma-separated strings to arrays
-$ExcludeFromCleanupArray = if ($ExcludeFromCleanup) { $ExcludeFromCleanup -split ',' | ForEach-Object { $_.Trim() } } else { @() }
-$ExcludeFromCopyArray = if ($ExcludeFromCopy) { $ExcludeFromCopy -split ',' | ForEach-Object { $_.Trim() } } else { @() }
- 
 #----------------------------Functions---------------------------------------- 
 function Convert-LocalPathToUNC {
     param(
@@ -221,6 +217,17 @@ try {
     Write-Info "Destination (remoteTemp): $remoteTemp"
     $copySucceeded = $false
     
+    # Split exclusion string into array for use in both copy methods
+    $ExcludeFromCopyArray = if ($ExcludeFromCopy) { 
+        $ExcludeFromCopy -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } 
+    } else { 
+        @() 
+    }
+    
+    if ($ExcludeFromCopyArray.Count -gt 0) {
+        Write-Info "Excluding from copy: [$($ExcludeFromCopyArray -join ', ')]"
+    }
+    
     try {
         # Check if UNC path is accessible
         $uncRemoteTemp = Convert-LocalPathToUNC -LocalPath $remoteTemp
@@ -234,11 +241,15 @@ try {
             
             foreach ($pattern in $ExcludeFromCopyArray) {
                 $trimmedPattern = $pattern.Trim()
-                # Determine if it's a directory or file based on extension
-                # Robocopy supports wildcards, so append * for startsWith behavior
-                if ($trimmedPattern -notmatch '\.[a-zA-Z0-9]+$') {
-                    $excludeDirs += "$trimmedPattern*"
+                # For robocopy: treat patterns as both file and folder exclusions
+                # If pattern has extension like .json, it's definitely a file
+                # If no extension, could match folders OR files starting with that name
+                if ($trimmedPattern -match '\.[a-zA-Z0-9]+$') {
+                    # Has extension - exclude as file
+                    $excludeFiles += $trimmedPattern
                 } else {
+                    # No extension - exclude both as folder and as file prefix
+                    $excludeDirs += $trimmedPattern
                     $excludeFiles += "$trimmedPattern*"
                 }
             }
@@ -281,70 +292,103 @@ try {
         Write-Info "Falling back to PowerShell remoting copy method..."
     }
     
-    # Fallback: Use Copy-Item with PowerShell session
+    # Fallback: Use compression-based transfer (much faster than file-by-file)
     if (-not $copySucceeded) {
-        Write-Info "Using Copy-Item through PowerShell session..."
+        Write-Info "Using compression-based transfer method..."
         
-        # Get files to copy, respecting exclusions
-        $allFiles = Get-ChildItem -Path $NewFilesPath -Recurse -File
-        $filesToCopy = @()
+        # Create local temp folder for staging files
+        $localTempFolder = Join-Path $env:TEMP "Deploy_Staging_$timeStamp"
+        $zipPath = Join-Path $env:TEMP "Deploy_$timeStamp.zip"
         
-        foreach ($file in $allFiles) {
-            $shouldExclude = $false
-            $relativePath = $file.FullName.Substring($NewFilesPath.Length + 1)
+        try {
+            New-Item -Path $localTempFolder -ItemType Directory -Force | Out-Null
             
-            foreach ($pattern in $ExcludeFromCopyArray) {
-                $trimmedPattern = $pattern.Trim()
-                # Check if any part of the relative path starts with the pattern
-                # Split path into segments and check each one
-                $pathSegments = $relativePath -split '\\\\'
-                foreach ($segment in $pathSegments) {
-                    if ($segment -like "$trimmedPattern*") {
-                        $shouldExclude = $true
-                        break
+            # Get files to copy, respecting exclusions
+            $allFiles = Get-ChildItem -Path $NewFilesPath -Recurse -File
+            $fileCount = 0
+            
+            Write-Info "Preparing files for transfer (filtering exclusions)..."
+            foreach ($file in $allFiles) {
+                $shouldExclude = $false
+                $relativePath = $file.FullName.Substring($NewFilesPath.Length + 1)
+                
+                foreach ($pattern in $ExcludeFromCopyArray) {
+                    $trimmedPattern = $pattern.Trim()
+                    # Check if the file name or any folder in path matches the pattern
+                    $pathSegments = $relativePath.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
+                    
+                    foreach ($segment in $pathSegments) {
+                        if ($segment -like "$trimmedPattern*" -or $segment -eq $trimmedPattern) {
+                            $shouldExclude = $true
+                            break
+                        }
                     }
+                    if ($shouldExclude) { break }
                 }
-                if ($shouldExclude) { break }
+                
+                if (-not $shouldExclude) {
+                    $destPath = Join-Path $localTempFolder $relativePath
+                    $destDir = Split-Path $destPath -Parent
+                    
+                    if (-not (Test-Path $destDir)) {
+                        New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+                    }
+                    
+                    Copy-Item -Path $file.FullName -Destination $destPath -Force
+                    $fileCount++
+                }
             }
             
-            if (-not $shouldExclude) {
-                $filesToCopy += @{
-                    SourcePath = $file.FullName
-                    RelativePath = $relativePath
-                }
-            }
-        }
-        
-        Write-Info "Copying $($filesToCopy.Count) files..."
-        
-        foreach ($fileInfo in $filesToCopy) {
-            $destPath = Join-Path $remoteTemp $fileInfo.RelativePath
-            $destDir = Split-Path $destPath -Parent
+            Write-Info "Staged $fileCount files. Compressing for transfer..."
             
-            # Create remote directory if needed
+            # Compress the staged files
+            Compress-Archive -Path "$localTempFolder\*" -DestinationPath $zipPath -Force
+            
+            $zipSize = (Get-Item $zipPath).Length / 1MB
+            Write-Info "Compressed to $([math]::Round($zipSize, 2)) MB"
+            
+            # Transfer single zip file to remote temp
+            $remoteZipPath = Join-Path $remoteTemp "deploy.zip"
+            Write-Info "Transferring compressed file to remote server..."
+            Copy-Item -Path $zipPath -Destination $remoteZipPath -ToSession $session -Force
+            
+            # Extract on remote server
+            Write-Info "Extracting files on remote server..."
             Invoke-Command -Session $session -ScriptBlock {
-                param($dir)
-                if (-not (Test-Path $dir)) {
-                    New-Item -Path $dir -ItemType Directory -Force | Out-Null
-                }
-            } -ArgumentList $destDir
+                param($zipPath, $destFolder)
+                Expand-Archive -Path $zipPath -DestinationPath $destFolder -Force
+                Remove-Item -Path $zipPath -Force
+            } -ArgumentList $remoteZipPath, $remoteTemp
             
-            # Copy file through session
-            Copy-Item -Path $fileInfo.SourcePath -Destination $destPath -ToSession $session -Force
+            Write-Success "Files transferred successfully using compression (1 file vs $fileCount individual files)."
+            
+        } finally {
+            # Clean up local temp files
+            if (Test-Path $localTempFolder) {
+                Remove-Item -Path $localTempFolder -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path $zipPath) {
+                Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+            }
         }
-        
-        Write-Success "Files copied successfully with Copy-Item."
     }
     
     $deploymentState.FilesCopied = $true
 
     # Execute deployment with detailed state tracking
     $deployResult = Invoke-Command -Session $session -ScriptBlock {
-        param($AppPoolName, $AppFolderLocation, $NewFilesPath, $BackupFolder, [string[]]$ExcludeFromCleanup)
+        param($AppPoolName, $AppFolderLocation, $NewFilesPath, $BackupFolder, [string]$ExcludeFromCleanup)
 
         function Write-Log { 
             param($m) 
             Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $m" 
+        }
+        
+        # Split the comma-separated string into array HERE in the scriptblock
+        $ExcludeArray = if ($ExcludeFromCleanup) { 
+            $ExcludeFromCleanup -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } 
+        } else { 
+            @() 
         }
 
         # Return object to track deployment state
@@ -417,8 +461,10 @@ try {
 			# Clean target folder, respecting exclusions
 			Write-Log "Cleaning target folder..."
 			
-			if ($ExcludeFromCleanup.Count -gt 0) {
-				Write-Log "Exclusion patterns: $($ExcludeFromCleanup -join ', ')"
+			if ($ExcludeArray.Count -gt 0) {
+				Write-Log "Files/folders to preserve: $($ExcludeArray -join ', ')"
+			} else {
+				Write-Log "No exclusions - ALL files will be removed"
 			}
 			
 			$allItems = Get-ChildItem -Path $AppFolderLocation -Force
@@ -426,12 +472,15 @@ try {
 			# Find all items that match exclusion patterns (direct children only)
 			foreach ($item in $allItems) {
 				$shouldKeep = $false
-				foreach ($ex in $ExcludeFromCleanup) {
-					$pattern = $ex.Trim()
-					if ($item.Name -like "$pattern*") {
-						$shouldKeep = $true
-						Write-Log "Preserving: $($item.Name)"
-						break
+				
+				if ($ExcludeArray.Count -gt 0) {
+					foreach ($ex in $ExcludeArray) {
+						$pattern = $ex.Trim()
+						if ($item.Name -eq $pattern -or $item.Name -like "$pattern*") {
+							$shouldKeep = $true
+							Write-Log "Preserving: $($item.Name)"
+							break
+						}
 					}
 				}
 				
@@ -481,7 +530,7 @@ try {
             Write-Log "Error during deployment: $_"
             return $result
         }
-    } -ArgumentList $AppPoolName, $AppFolderLocation, $remoteTemp, $BackupFolder, (,$ExcludeFromCleanupArray)
+    } -ArgumentList $AppPoolName, $AppFolderLocation, $remoteTemp, $BackupFolder, $ExcludeFromCleanup
 
     # Update deployment state based on remote results
     $deploymentState.AppPoolStopped = $deployResult.AppPoolStopped
