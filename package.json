@@ -2,7 +2,7 @@
     "name": "deploy-to-iis",
     "displayName": "Deploy to IIS",
     "description": "Your friendly deployment assistant for Angular apps to Windows IIS servers via PowerShell remoting",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "publisher": "ivanristic",
     "icon": "images/icon.png",
     "repository": {

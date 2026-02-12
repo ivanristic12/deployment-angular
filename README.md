@@ -113,7 +113,7 @@ The extension tests credentials before deployment to prevent lockouts. If locked
 
 ## Release Notes
 
-### 1.0.0
+### 1.0.4
 
 Initial release of Deploy to IIS
 - One-click deployment to IIS
