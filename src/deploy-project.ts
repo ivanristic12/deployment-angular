@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { spawn } from 'child_process';
+import { runPowerShell } from './powershell';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -53,20 +53,11 @@ export async function deployProject(params: DeployProjectParams): Promise<void> 
         throw new Error(`PowerShell script not found at: ${psScriptPath}`);
     }
 
-    return new Promise<void>((resolve, reject) => {
-        // Encode password as base64 to avoid special character issues
-        const passwordBuffer = Buffer.from(password, 'utf16le');
-        const passwordBase64 = passwordBuffer.toString('base64');
-        
-        // Get the PowerShell script path directly (skip batch file wrapper)
-        const psScriptPath = path.join(__dirname, '..', 'scripts', 'deploy-template.ps1');
-        
-        // Build PowerShell arguments array (no quotes needed with array syntax)
+    {
+        // Build script arguments array (no shell, no quoting issues).
+        // SECURITY: the password is NOT an argument - runPowerShell sends it via stdin.
         const psArgs = [
-            '-ExecutionPolicy', 'Bypass',
-            '-File', psScriptPath,
             '-Username', username,
-            '-PasswordBase64', passwordBase64,
             '-Server', server,
             '-AppPoolName', poolName,
             '-AppFolderLocation', appFolderLocation,
@@ -84,58 +75,32 @@ export async function deployProject(params: DeployProjectParams): Promise<void> 
             psArgs.push('-ExcludeFromCopy', excludeItems.join(','));
         }
 
-        // Spawn PowerShell directly with argument array (avoids quote escaping issues)
-        const process = spawn('powershell.exe', psArgs, {
-            cwd: workspaceRoot
-        });
+        let code: number | null;
+        try {
+            // SECURITY: full powershell.exe path, no shell, password via stdin (see powershell.ts)
+            const result = await runPowerShell({
+                scriptPath: psScriptPath,
+                args: psArgs,
+                password,
+                onOutput: (output) => params.outputChannel?.append(output)
+            });
+            code = result.exitCode;
+        } catch (error: any) {
+            params.outputChannel?.appendLine(`\nProcess Error: ${error.message}`);
+            throw error;
+        }
 
-        // Capture stdout
-        process.stdout.on('data', (data) => {
-            const output = data.toString();
-            console.log(output);
-            if (params.outputChannel) {
-                params.outputChannel.append(output);
-            }
-        });
+        params.outputChannel?.appendLine(`\n--- Deployment Process Finished (Exit Code: ${code}) ---`);
 
-        // Capture stderr
-        process.stderr.on('data', (data) => {
-            const output = data.toString();
-            console.log('stderr:', output);
-            if (params.outputChannel) {
-                params.outputChannel.append(output);
-            }
-        });
-
-        // Handle process completion
-        process.on('close', (code) => {
-            if (params.outputChannel) {
-                params.outputChannel.appendLine(`\n--- Deployment Process Finished (Exit Code: ${code}) ---`);
-            }
-            
-            if (code === 0 || code === null) {
-                if (params.outputChannel) {
-                    params.outputChannel.appendLine('\n=== Deployment Completed Successfully ===');
-                }
-                vscode.window.showInformationMessage('✅ Deployment completed successfully!');
-                resolve();
-            } else {
-                const errorMsg = `Deployment failed with exit code ${code}`;
-                if (params.outputChannel) {
-                    params.outputChannel.appendLine(`\n=== Deployment Failed ===`);
-                }
-                vscode.window.showErrorMessage(errorMsg);
-                reject(new Error(errorMsg));
-            }
-        });
-
-        // Handle process errors
-        process.on('error', (error) => {
-            console.error('Process error:', error);
-            if (params.outputChannel) {
-                params.outputChannel.appendLine(`\nProcess Error: ${error.message}`);
-            }
-            reject(error);
-        });
-    });
+        // code === null means the process was killed - that is NOT a success
+        if (code === 0) {
+            params.outputChannel?.appendLine('\n=== Deployment Completed Successfully ===');
+            vscode.window.showInformationMessage('✅ Deployment completed successfully!');
+        } else {
+            const errorMsg = `Deployment failed with exit code ${code}`;
+            params.outputChannel?.appendLine(`\n=== Deployment Failed ===`);
+            vscode.window.showErrorMessage(errorMsg);
+            throw new Error(errorMsg);
+        }
+    }
 }

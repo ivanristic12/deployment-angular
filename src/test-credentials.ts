@@ -1,9 +1,5 @@
-import * as vscode from 'vscode';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import * as path from 'path';
-
-const execAsync = promisify(exec);
+import { runPowerShell } from './powershell';
 
 interface TestCredentialsParams {
     server: string;
@@ -22,44 +18,34 @@ export async function testCredentials(params: TestCredentialsParams): Promise<{ 
     // Get the path to the test-credentials.ps1 script
     const scriptPath = path.join(__dirname, '..', 'scripts', 'test-credentials.ps1');
 
-    // Escape password for PowerShell - use base64 encoding to avoid special character issues
-    const passwordBuffer = Buffer.from(password, 'utf16le');
-    const passwordBase64 = passwordBuffer.toString('base64');
-
-    const command = `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}" -Server "${server}" -Username "${username}" -PasswordBase64 "${passwordBase64}" -TestPath "${testPath}"`;
-
     try {
-        const { stdout, stderr } = await execAsync(command, {
-            timeout: 30000  // 30 second timeout
+        // SECURITY: no shell, full powershell.exe path, password via stdin (see powershell.ts)
+        const result = await runPowerShell({
+            scriptPath,
+            args: ['-Server', server, '-Username', username, '-TestPath', testPath],
+            password,
+            timeoutMs: 30000  // 30 second timeout
         });
 
-        const output = stdout.trim();
+        if (result.timedOut) {
+            return { success: false, message: `Connection to ${server} timed out after 30 seconds.` };
+        }
 
-        if (output.startsWith('SUCCESS')) {
-            return { 
-                success: true, 
-                message: 'Credentials verified successfully' 
-            };
-        } else {
-            return { 
-                success: false, 
-                message: output.replace('FAILED: ', '') 
+        const output = result.stdout.trim();
+
+        if (result.exitCode === 0 && output.startsWith('SUCCESS')) {
+            return {
+                success: true,
+                message: 'Credentials verified successfully'
             };
         }
+
+        const message = (output || result.stderr.trim() || `Exit code ${result.exitCode}`).replace('FAILED: ', '');
+        return { success: false, message };
     } catch (error: any) {
-        // Parse error output
-        const errorOutput = error.stdout || error.message;
-        
-        if (errorOutput.includes('FAILED:')) {
-            return { 
-                success: false, 
-                message: errorOutput.replace('FAILED: ', '').trim() 
-            };
-        }
-        
-        return { 
-            success: false, 
-            message: `Connection failed: ${error.message}` 
+        return {
+            success: false,
+            message: `Connection failed: ${error.message}`
         };
     }
 }

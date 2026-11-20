@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { buildProject } from './build-project';
 import { prepareConfig } from './prepare-config';
 import { testCredentials } from './test-credentials';
@@ -71,8 +72,8 @@ export function activate(context: vscode.ExtensionContext) {
             }
         );
 
-        // Set HTML content
-        panel.webview.html = getWebviewContent();
+        // Set HTML content (with a strict Content-Security-Policy, see getWebviewContent)
+        panel.webview.html = getWebviewContent(getNonce());
 
         // Handle messages from the webview
         panel.webview.onDidReceiveMessage(
@@ -88,6 +89,16 @@ export function activate(context: vscode.ExtensionContext) {
                     let deployConfig;
                     let usedConfigPath;
                     
+                    // SECURITY: the selector is used in a file name - allow only a plain name
+                    if (message.configFileSelector && message.configFileSelector.trim() &&
+                        (!/^[A-Za-z0-9_\-.]+$/.test(message.configFileSelector.trim()) || message.configFileSelector.includes('..'))) {
+                        panel.webview.postMessage({
+                            command: 'credentialError',
+                            message: "Invalid configuration name. Use only letters, digits, '-', '_' and '.' (e.g. prod)."
+                        });
+                        return;
+                    }
+
                     if (message.configFileSelector && message.configFileSelector.trim()) {
                         const specificConfigPath = path.join(projectRoot, `deploy.${message.configFileSelector}.config.json`);
                         if (fs.existsSync(specificConfigPath)) {
@@ -248,12 +259,19 @@ function ensureDeployConfig() {
     }
 }
 
-function getWebviewContent(): string {
+function getNonce(): string {
+    return crypto.randomBytes(16).toString('base64');
+}
+
+function getWebviewContent(nonce: string): string {
+    // SECURITY: CSP blocks any network access and any script except our own (nonce),
+    // so even if text were injected into the page it could not run or send the password anywhere.
     return `
         <!DOCTYPE html>
         <html lang="en">
         <head>
             <meta charset="UTF-8">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Deploy Project</title>
             <style>
@@ -347,7 +365,7 @@ function getWebviewContent(): string {
                 </div>
                 <button id="deployBtn">Deploy</button>
             </div>
-            <script>
+            <script nonce="${nonce}">
                 const vscode = acquireVsCodeApi();
                 const usernameInput = document.getElementById('username');
                 const passwordInput = document.getElementById('password');
@@ -360,7 +378,9 @@ function getWebviewContent(): string {
                     const message = event.data;
                     if (message.command === 'credentialError') {
                         // Show error message
-                        errorMessage.innerHTML = '<span style="color: #f48771;">❌</span> Credential Error: ' + message.message;
+                        // SECURITY: textContent, never innerHTML - the message contains values from
+                        // deploy.config.json and server output, which must not be treated as HTML
+                        errorMessage.textContent = '❌ Credential Error: ' + message.message;
                         errorMessage.classList.add('show');
                         deployBtn.disabled = false;
                         deployBtn.textContent = 'Deploy';

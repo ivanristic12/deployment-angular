@@ -16,6 +16,14 @@ interface BuildProjectParams {
 export async function buildProject(params: BuildProjectParams): Promise<void> {
     const { configuration, workspaceRoot } = params;
 
+    // SECURITY: the value is placed on a shell command line (npm.cmd requires a shell on Windows),
+    // so only allow a plain configuration name - no spaces, quotes, &, |, etc.
+    if (!configuration || !/^[A-Za-z0-9_\-.]+$/.test(configuration)) {
+        const msg = `Invalid "configuration" in deploy config: "${configuration}". Use only letters, digits, '-', '_' and '.'.`;
+        vscode.window.showErrorMessage(msg);
+        throw new Error(msg);
+    }
+
     vscode.window.showInformationMessage(`🔨 Building project with configuration: ${configuration}`);
 
     const command = `npm run build -- --configuration=${configuration}`;
